@@ -60,11 +60,14 @@ fn witness_command_writes_outputs() {
 
     let witness_map = out_dir.path().join("witness_map.json");
     let witness_bin = out_dir.path().join("witness.bin");
-    let witness_wtns = out_dir.path().join("witness.wtns");
+    let witness_wtns = out_dir.path().join("acir.wtns");
 
     assert!(witness_map.exists(), "witness_map.json should be emitted");
     assert!(witness_bin.exists(), "witness.bin should be emitted");
-    assert!(witness_wtns.exists(), "witness.wtns should be emitted");
+    assert!(
+        witness_wtns.exists(),
+        "acir.wtns diagnostic should be emitted"
+    );
     assert!(
         fs::metadata(&witness_bin)
             .expect("witness.bin should have metadata")

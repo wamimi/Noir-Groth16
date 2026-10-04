@@ -1,0 +1,6 @@
+[package]
+name = "zero_public"
+type = "bin"
+authors = []
+
+[dependencies]

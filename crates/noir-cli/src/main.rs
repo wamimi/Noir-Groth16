@@ -188,7 +188,7 @@ fn interop_cmd(
 
     fs::create_dir_all(out_dir)
         .with_context(|| format!("failed creating output dir `{}`", out_dir.display()))?;
-    let mut witness = generate_witness_with_options(
+    let witness = generate_witness_with_options(
         &artifact,
         &inputs_json,
         WitnessSolveOptions { pedantic_solving },
@@ -202,7 +202,7 @@ fn interop_cmd(
         Some(&witness.witness_vector),
     )
     .context("failed compiling R1CS")?;
-    witness.witness_vector = system
+    let r1cs_witness = system
         .materialize_witness(&witness.witness_vector)
         .ok_or_else(|| {
             anyhow!(
@@ -216,15 +216,14 @@ fn interop_cmd(
     let wtns_path = out_dir.join("witness.wtns");
     write_r1cs_binary(&system, &r1cs_path)
         .with_context(|| format!("failed writing `{}`", r1cs_path.display()))?;
-    witness
-        .write_wtns(&wtns_path)
+    WitnessArtifacts::write_wtns_values(&r1cs_witness, &wtns_path)
         .with_context(|| format!("failed writing `{}`", wtns_path.display()))?;
 
     println!(
         "n_wires={} n_constraints={} witness_len={}",
         system.n_wires,
         system.n_constraints,
-        witness.witness_vector.len()
+        r1cs_witness.len()
     );
     Ok(())
 }
@@ -369,7 +368,7 @@ fn write_witness_outputs(witness: &WitnessArtifacts, out_dir: &PathBuf) -> Resul
 
     let witness_map_path = out_dir.join("witness_map.json");
     let witness_bin_path = out_dir.join("witness.bin");
-    let witness_wtns_path = out_dir.join("witness.wtns");
+    let witness_wtns_path = out_dir.join("acir.wtns");
 
     witness
         .write_witness_map_json(&witness_map_path)

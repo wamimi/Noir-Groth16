@@ -1,5 +1,23 @@
 # Noir Groth16 Backend
 
+## Fork scope and attribution
+
+This development fork builds on [Noir-Groth16 by James Bachini and its
+contributors](https://github.com/jamesbachini/Noir-Groth16). The original project
+history and existing notices are retained; the workspace license declaration
+remains `MIT OR Apache-2.0`.
+
+Fork-specific work for [noir-ckb](https://github.com/wamimi/noir-ckb-verifier)
+corrects public/private wire allocation and keeps exported proving witnesses
+aligned with that allocation. Validation covers the retained Noir beta.18 scalar
+Field fixtures, including private-first and interleaved parameters. It does not
+establish arbitrary Noir compatibility or constitute a security audit.
+
+Read the [wire-layout migration notes](docs/week14-wire-layout.md) before using
+this branch. Regenerate setup keys and proofs for changed R1CS artifacts. The
+upstream documentation below describes the original backend and may cover
+features outside this fork's validated CKB application profile.
+
 Noir-Groth16 is a Rust workspace that turns Noir artifacts into deterministic witness and R1CS outputs for Groth16 tooling.
 
 ```bash
@@ -102,7 +120,10 @@ Pedantic solving is enabled by default. Pass `--no-pedantic` to disable strict p
 Outputs:
 - `out/witness/witness_map.json`
 - `out/witness/witness.bin`
-- `out/witness/witness.wtns`
+- `out/witness/acir.wtns`
+
+These are ACIR-indexed diagnostics, not the remapped proving assignment. Use
+`interop` below to produce a matched R1CS/WTNS pair.
 
 ### `r1cs-json`
 

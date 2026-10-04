@@ -1,0 +1,6 @@
+[package]
+name = "interleaved"
+type = "bin"
+authors = []
+
+[dependencies]

@@ -4,7 +4,7 @@ use std::process::Command;
 
 use noir_acir::Artifact;
 use noir_r1cs::{compile_r1cs, write_r1cs_binary};
-use noir_witness::generate_witness_from_json_str;
+use noir_witness::{generate_witness_from_json_str, WitnessArtifacts};
 use tempfile::TempDir;
 
 #[test]
@@ -32,9 +32,10 @@ fn snarkjs_interop_smoke() {
     let r1cs_path = dir.join("circuit.r1cs");
     let wtns_path = dir.join("witness.wtns");
     write_r1cs_binary(&system, &r1cs_path).expect("r1cs should be written");
-    witness
-        .write_wtns(&wtns_path)
-        .expect("wtns should be written");
+    let r1cs_witness = system
+        .materialize_witness(&witness.witness_vector)
+        .expect("witness should materialize in R1CS wire order");
+    WitnessArtifacts::write_wtns_values(&r1cs_witness, &wtns_path).expect("wtns should be written");
 
     run(dir, &["wtns", "check", "circuit.r1cs", "witness.wtns"]);
 

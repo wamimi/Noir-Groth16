@@ -98,6 +98,8 @@ impl Default for WitnessSolveOptions {
 #[derive(Clone, Debug)]
 pub struct WitnessArtifacts {
     pub witness_map: WitnessMap<FieldElement>,
+    /// ACIR-indexed assignment: constant one, then w0, w1, ... .
+    /// Convert with R1csSystem::materialize_witness before proving/exporting R1CS WTNS.
     pub witness_vector: Vec<FieldElement>,
 }
 
@@ -143,8 +145,15 @@ impl WitnessArtifacts {
     }
 
     pub fn write_wtns(&self, path: impl AsRef<Path>) -> Result<(), WitnessError> {
-        let witness = self
-            .witness_vector
+        Self::write_wtns_values(&self.witness_vector, path)
+    }
+
+    /// Serialize values in caller-supplied order; performs no ACIR/R1CS mapping.
+    pub fn write_wtns_values(
+        values: &[FieldElement],
+        path: impl AsRef<Path>,
+    ) -> Result<(), WitnessError> {
+        let witness = values
             .iter()
             .map(|value| WtnsFieldElement::from(field_to_le_bytes_32(*value)))
             .collect::<Vec<_>>();
@@ -223,7 +232,7 @@ pub fn generate_witness_with_options(
             });
         }
 
-        for (witness_index, field) in assigned.witnesses.iter().zip(flattened.into_iter()) {
+        for (witness_index, field) in assigned.witnesses.iter().zip(flattened) {
             initial_witness.insert(Witness(*witness_index), field);
         }
     }

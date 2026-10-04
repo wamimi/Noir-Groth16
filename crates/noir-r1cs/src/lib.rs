@@ -135,6 +135,9 @@ pub struct MemoryOpMaterializationPattern {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct R1csSystem {
+    /// Original ACIR witness index -> R1CS wire. Required in new JSON exports.
+    /// Virtual witnesses introduced by lowering are not ACIR vector entries.
+    pub acir_wire_map: BTreeMap<u32, u32>,
     pub n_wires: u32,
     pub n_constraints: u32,
     pub n_public_outputs: u32,
@@ -379,8 +382,20 @@ impl<'a> LoweringContext<'a> {
         instance_witness: Option<&'a [FieldElement]>,
     ) -> Self {
         let mut wire_map = BTreeMap::new();
-        for witness in 0..=circuit.current_witness_index {
-            wire_map.insert(witness, witness + 1);
+        // R1CS public outputs precede public inputs. Each ACIR group is a
+        // BTreeSet; use that canonical order, not parameter source positions.
+        for witness in circuit
+            .return_values
+            .0
+            .iter()
+            .chain(circuit.public_parameters.0.iter())
+            .chain(circuit.private_parameters.iter())
+            .map(|w| w.witness_index())
+            .chain(0..=circuit.current_witness_index)
+        {
+            if !wire_map.contains_key(&witness) {
+                wire_map.insert(witness, wire_map.len() as u32 + 1);
+            }
         }
 
         Self {
@@ -427,6 +442,12 @@ impl<'a> LoweringContext<'a> {
         self.validate_post_invariants()?;
 
         Ok(R1csSystem {
+            acir_wire_map: self
+                .wire_map
+                .iter()
+                .filter(|(w, _)| **w <= self.circuit.current_witness_index)
+                .map(|(w, wire)| (*w, *wire))
+                .collect(),
             n_wires: self.next_wire,
             n_constraints: self.a_rows.len() as u32,
             n_public_outputs: self.circuit.return_values.indices().len() as u32,
@@ -442,6 +463,32 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn validate_program_invariants(&self) -> Result<(), R1csError> {
+        let mut classified = BTreeSet::new();
+        for witness in self
+            .circuit
+            .return_values
+            .0
+            .iter()
+            .chain(self.circuit.public_parameters.0.iter())
+            .chain(self.circuit.private_parameters.iter())
+        {
+            if witness.witness_index() > self.circuit.current_witness_index {
+                return Err(R1csError::InvalidProgramInvariant {
+                    details: format!(
+                        "input/return witness {} exceeds current_witness_index",
+                        witness.witness_index()
+                    ),
+                });
+            }
+            if !classified.insert(*witness) {
+                return Err(R1csError::InvalidProgramInvariant {
+                    details: format!(
+                        "overlapping input/return witness {} is unsupported",
+                        witness.witness_index()
+                    ),
+                });
+            }
+        }
         if !is_strictly_sorted(&self.circuit.public_parameters.indices()) {
             return Err(R1csError::NonDeterministicOrdering {
                 context: "public input ordering is not stable".to_string(),
@@ -1770,7 +1817,7 @@ impl<'a> LoweringContext<'a> {
                 }
             };
 
-            for (output, byte) in outputs.iter().zip(digest.into_iter()) {
+            for (output, byte) in outputs.iter().zip(digest) {
                 self.ensure_witness_in_range(*output, "BlackBoxFuncCall::Blake2s output")?;
                 let output_wire = self.wire_for_witness(*output)?;
                 self.enforce_wire_equals_constant(
@@ -1863,7 +1910,7 @@ impl<'a> LoweringContext<'a> {
                 }
             };
 
-            for (output, byte) in outputs.iter().zip(digest.into_iter()) {
+            for (output, byte) in outputs.iter().zip(digest) {
                 self.ensure_witness_in_range(*output, "BlackBoxFuncCall::Blake3 output")?;
                 let output_wire = self.wire_for_witness(*output)?;
                 self.enforce_wire_equals_constant(
@@ -1949,7 +1996,7 @@ impl<'a> LoweringContext<'a> {
         }
 
         sha256_compression(&mut state, &message);
-        for (output, value) in outputs.iter().zip(state.into_iter()) {
+        for (output, value) in outputs.iter().zip(state) {
             self.ensure_witness_in_range(*output, "BlackBoxFuncCall::Sha256Compression output")?;
             let output_wire = self.wire_for_witness(*output)?;
             self.enforce_wire_equals_constant(output_wire, FieldElement::from(u128::from(value)))?;
@@ -4708,7 +4755,7 @@ impl<'a> LoweringContext<'a> {
             for (bit_wire, bit) in bits
                 .iter()
                 .copied()
-                .zip(field_to_bits_le(value, num_bits as usize).into_iter())
+                .zip(field_to_bits_le(value, num_bits as usize))
             {
                 self.assign_derived_wire(
                     bit_wire,
@@ -4821,7 +4868,11 @@ impl<'a> LoweringContext<'a> {
             return Some(*value);
         }
         let witness = self.instance_witness?;
-        witness.get(wire as usize).copied()
+        // Instance values are ACIR-indexed, even while this API accepts a wire.
+        let acir_index = self.wire_map.iter().find_map(|(index, mapped_wire)| {
+            (*mapped_wire == wire && *index <= self.circuit.current_witness_index).then_some(*index)
+        })?;
+        witness.get(acir_index as usize + 1).copied()
     }
 
     fn assign_derived_wire(&mut self, wire: u32, value: FieldElement) -> Result<(), R1csError> {
@@ -5141,6 +5192,8 @@ impl R1csSystem {
         self.is_satisfied_with_full_witness(&full_witness)
     }
 
+    /// Convert an ACIR-indexed vector (constant, w0, w1, ...) to R1CS wire
+    /// order and solve lowering-created wires. Never pass a materialized vector.
     pub fn materialize_witness(&self, witness: &[FieldElement]) -> Option<Vec<FieldElement>> {
         self.materialize_witness_with_known(witness)
             .map(|result| result.0)
@@ -5246,8 +5299,8 @@ impl R1csSystem {
                     let target = term.wire as usize;
                     if a.1.is_empty()
                         && b.1.is_empty()
-                        && target >= witness.len()
                         && target < full.len()
+                        && !known[target]
                         && !term.coeff.is_zero()
                     {
                         let lhs = dot(&self.a[i], &full)?;
@@ -5525,10 +5578,18 @@ impl R1csSystem {
     ) -> Option<(Vec<FieldElement>, Vec<bool>)> {
         let mut full = vec![FieldElement::zero(); self.n_wires as usize];
         let mut known = vec![false; self.n_wires as usize];
-        let copy_len = std::cmp::min(witness.len(), full.len());
-        full[..copy_len].copy_from_slice(&witness[..copy_len]);
-        for slot in known.iter_mut().take(copy_len) {
-            *slot = true;
+        if witness.first() != Some(&FieldElement::one())
+            || witness.len() > self.acir_wire_map.len() + 1
+        {
+            return None;
+        }
+        for (index, value) in witness.iter().enumerate().skip(1) {
+            let wire = *self.acir_wire_map.get(&((index - 1) as u32))? as usize;
+            if wire == 0 || wire >= full.len() || known[wire] {
+                return None;
+            }
+            full[wire] = *value;
+            known[wire] = true;
         }
         if !full.is_empty() {
             full[0] = FieldElement::one();
@@ -5566,7 +5627,13 @@ impl R1csSystem {
         "none".to_string()
     }
 
-    fn is_satisfied_with_full_witness(&self, full_witness: &[FieldElement]) -> bool {
+    /// Check an already materialized R1CS assignment without remapping or solving.
+    pub fn is_satisfied_with_full_witness(&self, full_witness: &[FieldElement]) -> bool {
+        if full_witness.len() != self.n_wires as usize
+            || full_witness.first() != Some(&FieldElement::one())
+        {
+            return false;
+        }
         for i in 0..self.n_constraints as usize {
             let Some(left) = dot(&self.a[i], full_witness) else {
                 return false;
@@ -5615,7 +5682,7 @@ impl R1csSystem {
 
                 let output_bits =
                     field_to_bits_le(witness[pattern.output_wire], pattern.bit_wires.len());
-                for (bit_wire, bit) in pattern.bit_wires.iter().zip(output_bits.into_iter()) {
+                for (bit_wire, bit) in pattern.bit_wires.iter().zip(output_bits) {
                     if *bit_wire >= witness.len() || *bit_wire >= known.len() {
                         return None;
                     }
@@ -6742,6 +6809,7 @@ mod tests {
     #[test]
     fn malformed_rows_do_not_panic_and_fail_satisfaction() {
         let system = R1csSystem {
+            acir_wire_map: BTreeMap::from([(0, 1)]),
             n_wires: 2,
             n_constraints: 1,
             n_public_outputs: 0,

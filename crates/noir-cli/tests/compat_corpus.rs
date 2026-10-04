@@ -92,7 +92,7 @@ fn run_project_differential_check(project_dir: &Path) {
         .expect("witness should materialize to R1CS wire count");
 
     assert!(
-        system.is_satisfied(&materialized),
+        system.is_satisfied_with_full_witness(&materialized),
         "R1CS system should be satisfied for {name}"
     );
     assert_tampered_witnesses_fail(&system, &materialized, name);
@@ -137,7 +137,7 @@ fn assert_tampered_witnesses_fail(
         let mut tampered = witness.to_vec();
         tampered[wire_index] += witness[0];
         assert!(
-            !system.is_satisfied(&tampered),
+            !system.is_satisfied_with_full_witness(&tampered),
             "tampered witness unexpectedly satisfied constraints for {case_name} at wire {wire_index}"
         );
     }
